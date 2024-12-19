@@ -22,15 +22,35 @@ impl Render for SimpleTextBox {
             .items_center()
             .child(
                 div()
-                    .w(px(300.))
-                    .h(px(40.))
-                    .bg(white())
-                    .rounded_md()
-                    .shadow_md()
-                    .p_2()
                     .flex()
-                    .items_center()
-                    .child(self.text.clone()),
+                    .flex_col()
+                    .child(
+                        // Header
+                        div()
+                            .w(px(300.))
+                            .h(px(24.))
+                            .bg(rgb(0x2D3142))
+                            .rounded_t_md()
+                            .flex()
+                            .items_center()
+                            .px_2()
+                            .text_color(rgb(0xFFFFFF))
+                            .text_sm()
+                            .child("Notes"),
+                    )
+                    .child(
+                        // Text box
+                        div()
+                            .w(px(300.))
+                            .h(px(40.))
+                            .bg(white())
+                            .rounded_b_md()
+                            .shadow_md()
+                            .p_2()
+                            .flex()
+                            .items_center()
+                            .child(self.text.clone()),
+                    ),
             )
     }
 }
