@@ -41,7 +41,21 @@ impl SimpleTextBox {
             zoom_level: 1.0,
         }
     }
+    fn adjust_positions_for_zoom(&mut self, old_zoom: f32, new_zoom: f32, center: Point<Pixels>) {
+        let scale_factor = new_zoom / old_zoom;
 
+        for textbox in &mut self.textboxes {
+            // Calculate distance from center
+            let dx = textbox.position.x - center.x / old_zoom;
+            let dy = textbox.position.y - center.y / old_zoom;
+
+            // Scale the distance and add back to center
+            textbox.position = point(
+                center.x / new_zoom + dx * scale_factor,
+                center.y / new_zoom + dy * scale_factor,
+            );
+        }
+    }
     fn spawn_new_textbox(&mut self, position: Point<Pixels>) {
         self.textboxes.push(TextBoxData {
             text: "New Note".into(),
@@ -79,6 +93,7 @@ impl SimpleTextBox {
 impl Render for SimpleTextBox {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
         let window_size = cx.window_bounds().get_bounds().size;
+        let viewport_center = point(window_size.width / 2.0, window_size.height / 2.0);
 
         div()
             .size_full()
@@ -109,22 +124,23 @@ impl Render for SimpleTextBox {
                     }
                 }
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
+            .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, cx| {
                 if event.modifiers.control || event.modifiers.platform {
+                    let old_zoom = this.zoom_level;
                     match event.delta {
                         ScrollDelta::Lines(delta) => {
                             let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
                             this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
-                            println!("New zoom level: {}", this.zoom_level);
-                            cx.notify();
                         }
                         ScrollDelta::Pixels(delta) => {
                             let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
                             this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
-                            println!("New zoom level: {}", this.zoom_level);
-                            cx.notify();
                         }
                     }
+
+                    // Adjust positions relative to center
+                    this.adjust_positions_for_zoom(old_zoom, this.zoom_level, viewport_center);
+                    cx.notify();
                 }
             }))
             .on_mouse_up(
