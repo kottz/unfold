@@ -1,5 +1,7 @@
 use gpui::*;
 
+actions!(simple_text_box, [ResetZoom, Backspace]);
+
 #[derive(Clone)]
 struct TextBoxData {
     text: SharedString,
@@ -62,17 +64,30 @@ struct SimpleTextBox {
     drag_offset: Option<Point<Pixels>>,
     last_move_direction: Option<Point<Pixels>>,
     viewport: Viewport,
+    focus_handle: FocusHandle,
 }
 
 impl SimpleTextBox {
-    fn new(_cx: &mut ViewContext<Self>) -> Self {
+    fn new(cx: &mut ViewContext<Self>) -> Self {
         Self {
             textboxes: vec![],
             is_dragging: None,
             drag_offset: None,
             last_move_direction: None,
             viewport: Viewport::new(),
+            focus_handle: cx.focus_handle(),
         }
+    }
+
+    fn backspace(&mut self, _: &Backspace, cx: &mut ViewContext<Self>) {
+        println!("Backspace pressed");
+        cx.notify();
+    }
+
+    fn reset_zoom(&mut self, _: &ResetZoom, cx: &mut ViewContext<Self>) {
+        println!("Resetting zoom");
+        self.viewport.zoom = 1.0;
+        cx.notify();
     }
 
     fn spawn_new_textbox(&mut self, position: Point<Pixels>) {
@@ -117,6 +132,12 @@ impl SimpleTextBox {
     }
 }
 
+impl FocusableView for SimpleTextBox {
+    fn focus_handle(&self, _: &AppContext) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for SimpleTextBox {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
         let window_size = cx.window_bounds().get_bounds().size;
@@ -126,6 +147,10 @@ impl Render for SimpleTextBox {
             .size_full()
             .bg(rgb(0xEEEEEE))
             .flex()
+            .key_context("simple_text_box")
+            .track_focus(&self.focus_handle(cx))
+            .on_action(cx.listener(Self::reset_zoom))
+            .on_action(cx.listener(Self::backspace))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, cx| {
                 if let Some(drag_idx) = this.is_dragging {
                     if let Some(offset) = this.drag_offset {
@@ -338,18 +363,36 @@ impl Render for SimpleTextBox {
 
 fn main() {
     App::new().run(|cx: &mut AppContext| {
+        println!("Registering key bindings...");
+        cx.bind_keys([KeyBinding::new("backspace", Backspace, None),
+                      KeyBinding::new("ctrl-0", ResetZoom, None)]);
+        println!("Key bindings registered!");
+
         let bounds = Bounds::centered(None, size(px(800.), px(600.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: None,
-                window_decorations: Some(WindowDecorations::Client),
-                is_movable: true,
-                ..Default::default()
-            },
-            |cx| cx.new_view(SimpleTextBox::new),
-        )
-        .unwrap();
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: None,
+                    window_decorations: Some(WindowDecorations::Client),
+                    is_movable: true,
+                    ..Default::default()
+                },
+                |cx| {
+                    let view = cx.new_view(|cx| SimpleTextBox {
+                        textboxes: vec![],
+                        is_dragging: None,
+                        drag_offset: None,
+                        last_move_direction: None,
+                        viewport: Viewport::new(),
+                        focus_handle: cx.focus_handle(),
+                    });
+                    cx.focus_view(&view);
+                    view
+                },
+            )
+            .unwrap();
+
         cx.activate(true);
     });
 }
