@@ -28,6 +28,7 @@ struct SimpleTextBox {
     is_dragging: Option<usize>,
     drag_offset: Option<Point<Pixels>>,
     last_move_direction: Option<Point<Pixels>>,
+    zoom_level: f32,
 }
 
 impl SimpleTextBox {
@@ -37,6 +38,7 @@ impl SimpleTextBox {
             is_dragging: None,
             drag_offset: None,
             last_move_direction: None,
+            zoom_level: 1.0,
         }
     }
 
@@ -87,8 +89,10 @@ impl Render for SimpleTextBox {
                     if let Some(offset) = this.drag_offset {
                         if let Some(textbox) = this.textboxes.get_mut(drag_idx) {
                             let old_position = textbox.position;
-                            let new_position =
-                                point(event.position.x - offset.x, event.position.y - offset.y);
+                            let new_position = point(
+                                event.position.x / this.zoom_level - offset.x,
+                                event.position.y / this.zoom_level - offset.y,
+                            );
 
                             let move_delta = point(
                                 new_position.x - old_position.x,
@@ -105,6 +109,24 @@ impl Render for SimpleTextBox {
                     }
                 }
             }))
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
+                if event.modifiers.control || event.modifiers.platform {
+                    match event.delta {
+                        ScrollDelta::Lines(delta) => {
+                            let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
+                            this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
+                            println!("New zoom level: {}", this.zoom_level);
+                            cx.notify();
+                        }
+                        ScrollDelta::Pixels(delta) => {
+                            let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
+                            this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
+                            println!("New zoom level: {}", this.zoom_level);
+                            cx.notify();
+                        }
+                    }
+                }
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _cx| {
@@ -116,18 +138,17 @@ impl Render for SimpleTextBox {
             .children({
                 let mut elements = Vec::new();
 
-                // Add textboxes
                 elements.extend(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
                     div()
                         .absolute()
-                        .left(textbox.position.x)
-                        .top(textbox.position.y)
+                        .left(textbox.position.x * self.zoom_level)
+                        .top(textbox.position.y * self.zoom_level)
                         .flex()
                         .flex_col()
                         .child(
                             div()
-                                .w(px(300.))
-                                .h(px(24.))
+                                .w(px(300.0 * self.zoom_level))
+                                .h(px(24.0 * self.zoom_level))
                                 .bg(rgb(0x2D3142))
                                 .rounded_t_md()
                                 .flex()
@@ -147,8 +168,10 @@ impl Render for SimpleTextBox {
                                         this.is_dragging = Some(idx);
                                         if let Some(textbox) = this.textboxes.get(idx) {
                                             this.drag_offset = Some(point(
-                                                event.position.x - textbox.position.x,
-                                                event.position.y - textbox.position.y,
+                                                (event.position.x / this.zoom_level)
+                                                    - textbox.position.x,
+                                                (event.position.y / this.zoom_level)
+                                                    - textbox.position.y,
                                             ));
                                         }
                                     }),
@@ -161,63 +184,60 @@ impl Render for SimpleTextBox {
                                         .w_full()
                                         .child("Notes")
                                         .child(div().flex().gap_2().children(vec![
-                                                // Close button
-                                                div()
-                                                    .w(px(16.))
-                                                    .h(px(16.))
-                                                    .bg(rgb(0xFF5252))
-                                                    .rounded_full()
-                                                    .cursor(CursorStyle::PointingHand)
-                                                    .flex()
-                                                    .justify_center()
-                                                    .items_center()
-                                                    .text_color(rgb(0xFFFFFF))
-                                                    .child("×")
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(
-                                                            move |this, _: &MouseDownEvent, cx| {
-                                                                this.remove_textbox(idx);
+                                            div()
+                                                .w(px(16.0 * self.zoom_level))
+                                                .h(px(16.0 * self.zoom_level))
+                                                .bg(rgb(0xFF5252))
+                                                .rounded_full()
+                                                .cursor(CursorStyle::PointingHand)
+                                                .flex()
+                                                .justify_center()
+                                                .items_center()
+                                                .text_color(rgb(0xFFFFFF))
+                                                .child("×")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |this, _: &MouseDownEvent, cx| {
+                                                            this.remove_textbox(idx);
+                                                            cx.notify();
+                                                        },
+                                                    ),
+                                                ),
+                                            div()
+                                                .w(px(16.0 * self.zoom_level))
+                                                .h(px(16.0 * self.zoom_level))
+                                                .bg(rgb(0x4CAF50))
+                                                .rounded_full()
+                                                .cursor(CursorStyle::PointingHand)
+                                                .flex()
+                                                .justify_center()
+                                                .items_center()
+                                                .text_color(rgb(0xFFFFFF))
+                                                .child("+")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |this, _: &MouseDownEvent, cx| {
+                                                            if let Some(textbox) =
+                                                                this.textboxes.get(idx)
+                                                            {
+                                                                this.spawn_new_textbox(point(
+                                                                    textbox.position.x + px(320.),
+                                                                    textbox.position.y,
+                                                                ));
                                                                 cx.notify();
-                                                            },
-                                                        ),
+                                                            }
+                                                        },
                                                     ),
-                                                // Add button
-                                                div()
-                                                    .w(px(16.))
-                                                    .h(px(16.))
-                                                    .bg(rgb(0x4CAF50))
-                                                    .rounded_full()
-                                                    .cursor(CursorStyle::PointingHand)
-                                                    .flex()
-                                                    .justify_center()
-                                                    .items_center()
-                                                    .text_color(rgb(0xFFFFFF))
-                                                    .child("+")
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(
-                                                            move |this, _: &MouseDownEvent, cx| {
-                                                                if let Some(textbox) =
-                                                                    this.textboxes.get(idx)
-                                                                {
-                                                                    this.spawn_new_textbox(point(
-                                                                        textbox.position.x
-                                                                            + px(320.),
-                                                                        textbox.position.y,
-                                                                    ));
-                                                                    cx.notify();
-                                                                }
-                                                            },
-                                                        ),
-                                                    ),
-                                            ])),
+                                                ),
+                                        ])),
                                 ),
                         )
                         .child(
                             div()
-                                .w(px(300.))
-                                .h(px(40.))
+                                .w(px(300.0 * self.zoom_level))
+                                .h(px(40.0 * self.zoom_level))
                                 .bg(white())
                                 .rounded_b_md()
                                 .shadow_md()
@@ -228,15 +248,14 @@ impl Render for SimpleTextBox {
                         )
                 }));
 
-                // Add circular add button when no textboxes exist
                 if self.textboxes.is_empty() {
                     elements.push(
                         div()
                             .absolute()
-                            .left(window_size.width / 2.0 - px(25.))
-                            .top(window_size.height / 2.0 - px(25.))
-                            .w(px(50.))
-                            .h(px(50.))
+                            .left(window_size.width / 2.0 - px(25.0 * self.zoom_level))
+                            .top(window_size.height / 2.0 - px(25.0 * self.zoom_level))
+                            .w(px(50.0 * self.zoom_level))
+                            .h(px(50.0 * self.zoom_level))
                             .bg(rgb(0x4CAF50))
                             .rounded_full()
                             .cursor(CursorStyle::PointingHand)
@@ -250,8 +269,8 @@ impl Render for SimpleTextBox {
                                 MouseButton::Left,
                                 cx.listener(|this, event: &MouseDownEvent, cx| {
                                     this.spawn_new_textbox(point(
-                                        event.position.x - px(150.), // Center the textbox
-                                        event.position.y - px(32.),  // Center the textbox
+                                        event.position.x / this.zoom_level - px(150.),
+                                        event.position.y / this.zoom_level - px(32.),
                                     ));
                                     cx.notify();
                                 }),
