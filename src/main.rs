@@ -87,11 +87,94 @@ impl SimpleTextBox {
     }
 
     fn backspace(&mut self, _: &Backspace, cx: &mut ViewContext<Self>) {
+        println!("Backspace pressed!");
         cx.notify();
     }
 
     fn reset_zoom(&mut self, _: &ResetZoom, cx: &mut ViewContext<Self>) {
-        self.viewport.zoom = 1.0;
+        // 1. If there are no textboxes, choose a default
+        if self.textboxes.is_empty() {
+            self.viewport.zoom = 1.0;
+            self.viewport.center = point(px(0.0), px(0.0));
+            cx.notify();
+            return;
+        }
+
+        // 2. Compute the bounding box for all textboxes
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+
+        for tb in &self.textboxes {
+            let x1 = tb.position.x.0;
+            let x2 = tb.position.x.0 + tb.size.width.0;
+            let y1 = tb.position.y.0;
+            let y2 = tb.position.y.0 + tb.size.height.0;
+
+            min_x = min_x.min(x1);
+            max_x = max_x.max(x2);
+            min_y = min_y.min(y1);
+            max_y = max_y.max(y2);
+        }
+
+        let box_width = (max_x - min_x).max(1.0);
+        let box_height = (max_y - min_y).max(1.0);
+
+        // 3. Current window size
+        let window_size = cx.window_bounds().get_bounds().size;
+        let win_w = window_size.width.0;
+        let win_h = window_size.height.0;
+
+        // 4. Center of the bounding box
+        let box_center_x = (min_x + max_x) / 2.0;
+        let box_center_y = (min_y + max_y) / 2.0;
+
+        // 5. Differentiate single-box vs multiple-box logic
+        let count = self.textboxes.len();
+
+        if count == 1 {
+            //
+            // For a single box, try to scale it so that it fills ~60% of the window.
+            // If the box is large, we clamp further.
+            //
+            let fill_ratio = 0.60; // 60% of window
+            let fit_zoom_x = (win_w * fill_ratio) / box_width;
+            let fit_zoom_y = (win_h * fill_ratio) / box_height;
+
+            let best_zoom = fit_zoom_x.min(fit_zoom_y);
+            // Final clamp so we don’t overshoot
+            let new_zoom = best_zoom.clamp(0.1, 3.0);
+
+            self.viewport.zoom = new_zoom;
+            // Shift so bounding box center is at window center
+            self.viewport.center = point(
+                px(box_center_x - (win_w / 2.0) / new_zoom),
+                px(box_center_y - (win_h / 2.0) / new_zoom),
+            );
+        } else {
+            //
+            // For multiple boxes, do a straightforward "zoom to fit" approach:
+            // A small margin ensures there’s some space around them.
+            //
+            let margin_ratio = 0.10; // 10% margin on each side
+            let margin_factor = 1.0 / (1.0 - 2.0 * margin_ratio);
+
+            let inflated_width = box_width * margin_factor;
+            let inflated_height = box_height * margin_factor;
+
+            let fit_zoom_x = win_w / inflated_width;
+            let fit_zoom_y = win_h / inflated_height;
+            let best_zoom = fit_zoom_x.min(fit_zoom_y);
+            let new_zoom = best_zoom.clamp(0.1, 3.0);
+
+            self.viewport.zoom = new_zoom;
+            self.viewport.center = point(
+                px(box_center_x - (win_w / 2.0) / new_zoom),
+                px(box_center_y - (win_h / 2.0) / new_zoom),
+            );
+        }
+
         cx.notify();
     }
 
@@ -190,43 +273,35 @@ impl Render for SimpleTextBox {
             }))
             // Zoom at mouse cursor
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
-                if event.modifiers.control || event.modifiers.platform {
-                    match event.delta {
-                        ScrollDelta::Lines(delta) => {
-                            // Pin the mouse location in world space before zoom
-                            let old_mouse_world =
-                                this.viewport.inverse_transform_point(event.position);
+                match event.delta {
+                    ScrollDelta::Lines(delta) => {
+                        // Pin the mouse location in world space before zoom
+                        let old_mouse_world = this.viewport.inverse_transform_point(event.position);
 
-                            let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
-                            this.viewport.zoom =
-                                (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+                        let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
+                        this.viewport.zoom = (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
 
-                            // Pin the mouse location in world space after zoom
-                            let new_mouse_world =
-                                this.viewport.inverse_transform_point(event.position);
+                        // Pin the mouse location in world space after zoom
+                        let new_mouse_world = this.viewport.inverse_transform_point(event.position);
 
-                            // Shift the center so that these two coincide
-                            this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
-                            this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
+                        // Shift the center so that these two coincide
+                        this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
+                        this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
 
-                            cx.notify();
-                        }
-                        ScrollDelta::Pixels(delta) => {
-                            let old_mouse_world =
-                                this.viewport.inverse_transform_point(event.position);
+                        cx.notify();
+                    }
+                    ScrollDelta::Pixels(delta) => {
+                        let old_mouse_world = this.viewport.inverse_transform_point(event.position);
 
-                            let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
-                            this.viewport.zoom =
-                                (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+                        let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
+                        this.viewport.zoom = (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
 
-                            let new_mouse_world =
-                                this.viewport.inverse_transform_point(event.position);
+                        let new_mouse_world = this.viewport.inverse_transform_point(event.position);
 
-                            this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
-                            this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
+                        this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
+                        this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
 
-                            cx.notify();
-                        }
+                        cx.notify();
                     }
                 }
             }))
@@ -295,8 +370,7 @@ impl Render for SimpleTextBox {
                                         .items_center()
                                         .w_full()
                                         .child("Notes")
-                                        .child(
-                                            div().flex().gap_2().children(vec![
+                                        .child(div().flex().gap_2().children(vec![
                                                 // Close button
                                                 div()
                                                     .text_size(px(16.0 * self.viewport.zoom))
@@ -349,8 +423,7 @@ impl Render for SimpleTextBox {
                                                             },
                                                         ),
                                                     ),
-                                            ]),
-                                        ),
+                                            ])),
                                 ),
                         )
                         .child(
