@@ -198,7 +198,7 @@ impl Render for SimpleTextBox {
                                 .flex()
                                 .justify_between()
                                 .items_center()
-                                .px_2()
+                                .px(px(8.0 * self.viewport.zoom))
                                 .text_color(rgb(0xFFFFFF))
                                 .text_sm()
                                 .cursor(if self.is_dragging == Some(idx) {
@@ -292,7 +292,7 @@ impl Render for SimpleTextBox {
                                 .bg(white())
                                 .rounded_b_md()
                                 .shadow_md()
-                                .p_2()
+                                .px(px(8.0 * self.viewport.zoom))
                                 .flex()
                                 .items_center()
                                 .child(textbox.text.clone()),
