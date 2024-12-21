@@ -107,6 +107,14 @@ impl SimpleTextBox {
             }
         }
     }
+    fn create_text_style(&self, base_size: f32) -> TextStyle {
+        TextStyle {
+            font_size: AbsoluteLength::Pixels(gpui::Pixels(base_size * self.viewport.zoom)),
+            font_weight: FontWeight::NORMAL, // or BOLD for headers
+            color: rgb(0x000000).into(),     // or any other color
+            ..Default::default()
+        }
+    }
 }
 
 impl Render for SimpleTextBox {
@@ -215,6 +223,7 @@ impl Render for SimpleTextBox {
                                 )
                                 .child(
                                     div()
+                                        .text_size(px(14.0 * self.viewport.zoom))
                                         .flex()
                                         .justify_between()
                                         .items_center()
@@ -223,6 +232,7 @@ impl Render for SimpleTextBox {
                                         .child(div().flex().gap_2().children(vec![
                                             // Close button
                                             div()
+                                                .text_size(px(16.0 * self.viewport.zoom))
                                                 .w(px(16.0 * self.viewport.zoom))
                                                 .h(px(16.0 * self.viewport.zoom))
                                                 .bg(rgb(0xFF5252))
@@ -244,6 +254,7 @@ impl Render for SimpleTextBox {
                                                 ),
                                             // Add button
                                             div()
+                                                .text_size(px(16.0 * self.viewport.zoom))
                                                 .w(px(16.0 * self.viewport.zoom))
                                                 .h(px(16.0 * self.viewport.zoom))
                                                 .bg(rgb(0x4CAF50))
@@ -275,6 +286,7 @@ impl Render for SimpleTextBox {
                         )
                         .child(
                             div()
+                                .text_size(px(16.0 * self.viewport.zoom))
                                 .w(transformed_size.width)
                                 .h(px(40.0 * self.viewport.zoom))
                                 .bg(white())
@@ -294,6 +306,7 @@ impl Render for SimpleTextBox {
                             .absolute()
                             .left(window_size.width / 2.0 - px(25.0 * self.viewport.zoom))
                             .top(window_size.height / 2.0 - px(25.0 * self.viewport.zoom))
+                            .text_size(px(20.0 * self.viewport.zoom))
                             .w(px(50.0 * self.viewport.zoom))
                             .h(px(50.0 * self.viewport.zoom))
                             .bg(rgb(0x4CAF50))
