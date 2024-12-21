@@ -4,12 +4,30 @@ use gpui::*;
 struct TextBoxData {
     text: SharedString,
     position: Point<Pixels>,
+    size: Size<Pixels>,
+}
+
+impl TextBoxData {
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::new(self.position, self.size)
+    }
+
+    fn overlaps(&self, other: &TextBoxData) -> bool {
+        let b1 = self.bounds();
+        let b2 = other.bounds();
+
+        b1.origin.x < (b2.origin.x + b2.size.width)
+            && (b1.origin.x + b1.size.width) > b2.origin.x
+            && b1.origin.y < (b2.origin.y + b2.size.height)
+            && (b1.origin.y + b1.size.height) > b2.origin.y
+    }
 }
 
 struct SimpleTextBox {
     textboxes: Vec<TextBoxData>,
-    is_dragging: Option<usize>, // Index of the textbox being dragged
+    is_dragging: Option<usize>,
     drag_offset: Option<Point<Pixels>>,
+    last_move_direction: Option<Point<Pixels>>,
 }
 
 impl SimpleTextBox {
@@ -18,17 +36,44 @@ impl SimpleTextBox {
             textboxes: vec![TextBoxData {
                 text: "Hello World".into(),
                 position: point(px(250.), px(250.)),
+                size: size(px(300.), px(64.)), // 24px header + 40px content
             }],
             is_dragging: None,
             drag_offset: None,
+            last_move_direction: None,
         }
     }
 
     fn spawn_new_textbox(&mut self, base_position: Point<Pixels>) {
         self.textboxes.push(TextBoxData {
             text: "New Note".into(),
-            position: point(base_position.x + px(320.), base_position.y), // 300px width + 20px gap
+            position: point(base_position.x + px(320.), base_position.y),
+            size: size(px(300.), px(64.)),
         });
+    }
+
+    fn handle_collision(&mut self, moving_idx: usize, move_delta: Point<Pixels>) {
+        let mut boxes_to_move = vec![];
+        let moving_box = &self.textboxes[moving_idx];
+
+        // Find all boxes that collide with the moving box
+        for (idx, other_box) in self.textboxes.iter().enumerate() {
+            if idx != moving_idx && moving_box.overlaps(other_box) {
+                boxes_to_move.push(idx);
+            }
+        }
+
+        // Move all colliding boxes
+        for idx in boxes_to_move {
+            if let Some(box_to_move) = self.textboxes.get_mut(idx) {
+                box_to_move.position = point(
+                    box_to_move.position.x + move_delta.x,
+                    box_to_move.position.y + move_delta.y,
+                );
+                // Recursively handle any new collisions
+                self.handle_collision(idx, move_delta);
+            }
+        }
     }
 }
 
@@ -42,8 +87,23 @@ impl Render for SimpleTextBox {
                 if let Some(drag_idx) = this.is_dragging {
                     if let Some(offset) = this.drag_offset {
                         if let Some(textbox) = this.textboxes.get_mut(drag_idx) {
-                            textbox.position =
+                            let old_position = textbox.position;
+                            let new_position =
                                 point(event.position.x - offset.x, event.position.y - offset.y);
+
+                            // Calculate movement delta
+                            let move_delta = point(
+                                new_position.x - old_position.x,
+                                new_position.y - old_position.y,
+                            );
+
+                            // Update position
+                            textbox.position = new_position;
+                            this.last_move_direction = Some(move_delta);
+
+                            // Handle collisions
+                            this.handle_collision(drag_idx, move_delta);
+
                             cx.notify();
                         }
                     }
@@ -54,6 +114,7 @@ impl Render for SimpleTextBox {
                 cx.listener(|this, _: &MouseUpEvent, _cx| {
                     this.is_dragging = None;
                     this.drag_offset = None;
+                    this.last_move_direction = None;
                 }),
             )
             .children(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
@@ -64,7 +125,6 @@ impl Render for SimpleTextBox {
                     .flex()
                     .flex_col()
                     .child(
-                        // Header
                         div()
                             .w(px(300.))
                             .h(px(24.))
@@ -94,7 +154,6 @@ impl Render for SimpleTextBox {
                                 }),
                             )
                             .child(
-                                // Title and add button container
                                 div()
                                     .flex()
                                     .justify_between()
@@ -102,11 +161,10 @@ impl Render for SimpleTextBox {
                                     .w_full()
                                     .child("Notes")
                                     .child(
-                                        // Add button
                                         div()
                                             .w(px(16.))
                                             .h(px(16.))
-                                            .bg(rgb(0x4CAF50)) // Green color
+                                            .bg(rgb(0x4CAF50))
                                             .rounded_full()
                                             .cursor(CursorStyle::PointingHand)
                                             .flex()
@@ -127,7 +185,6 @@ impl Render for SimpleTextBox {
                             ),
                     )
                     .child(
-                        // Text box
                         div()
                             .w(px(300.))
                             .h(px(40.))
