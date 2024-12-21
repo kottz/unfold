@@ -2,16 +2,18 @@ use gpui::*;
 
 struct SimpleTextBox {
     text: SharedString,
+    position: Point<Pixels>,
     is_dragging: bool,
-    start_position: Option<Point<Pixels>>,
+    drag_offset: Option<Point<Pixels>>,
 }
 
 impl SimpleTextBox {
     fn new(_cx: &mut ViewContext<Self>) -> Self {
         Self {
             text: "Hello World".into(),
+            position: point(px(250.), px(250.)), // Initial position
             is_dragging: false,
-            start_position: None,
+            drag_offset: None,
         }
     }
 }
@@ -22,10 +24,27 @@ impl Render for SimpleTextBox {
             .size_full()
             .bg(rgb(0xEEEEEE))
             .flex()
-            .justify_center()
-            .items_center()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, cx| {
+                if this.is_dragging {
+                    if let Some(offset) = this.drag_offset {
+                        this.position =
+                            point(event.position.x - offset.x, event.position.y - offset.y);
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _cx| {
+                    this.is_dragging = false;
+                    this.drag_offset = None;
+                }),
+            )
             .child(
                 div()
+                    .absolute()
+                    .left(self.position.x)
+                    .top(self.position.y)
                     .flex()
                     .flex_col()
                     .child(
@@ -40,31 +59,19 @@ impl Render for SimpleTextBox {
                             .px_2()
                             .text_color(rgb(0xFFFFFF))
                             .text_sm()
-                            .cursor(CursorStyle::OpenHand)
+                            .cursor(if self.is_dragging {
+                                CursorStyle::ClosedHand
+                            } else {
+                                CursorStyle::OpenHand
+                            })
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, ev: &MouseDownEvent, cx| {
+                                cx.listener(|this, event: &MouseDownEvent, _cx| {
                                     this.is_dragging = true;
-                                    this.start_position = Some(ev.position);
-                                    cx.start_window_move();
-                                    cx.notify();
-                                }),
-                            )
-                            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, cx| {
-                                if this.is_dragging {
-                                    if let Some(start) = this.start_position {
-                                        if ev.position != start {
-                                            cx.start_window_move();
-                                        }
-                                    }
-                                }
-                            }))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _ev: &MouseUpEvent, cx| {
-                                    this.is_dragging = false;
-                                    this.start_position = None;
-                                    cx.notify();
+                                    this.drag_offset = Some(point(
+                                        event.position.x - this.position.x,
+                                        event.position.y - this.position.y,
+                                    ));
                                 }),
                             )
                             .child("Notes"),
@@ -89,7 +96,6 @@ impl Render for SimpleTextBox {
 fn main() {
     App::new().run(|cx: &mut AppContext| {
         let bounds = Bounds::centered(None, size(px(800.), px(600.)), cx);
-
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
