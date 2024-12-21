@@ -23,12 +23,45 @@ impl TextBoxData {
     }
 }
 
+#[derive(Clone)]
+struct Viewport {
+    zoom: f32,
+    center: Point<Pixels>,
+}
+
+impl Viewport {
+    fn new() -> Self {
+        Self {
+            zoom: 1.0,
+            center: point(px(0.0), px(0.0)),
+        }
+    }
+
+    fn transform_point(&self, p: Point<Pixels>) -> Point<Pixels> {
+        point(
+            (p.x - self.center.x) * self.zoom + self.center.x,
+            (p.y - self.center.y) * self.zoom + self.center.y,
+        )
+    }
+
+    fn inverse_transform_point(&self, p: Point<Pixels>) -> Point<Pixels> {
+        point(
+            (p.x - self.center.x) / self.zoom + self.center.x,
+            (p.y - self.center.y) / self.zoom + self.center.y,
+        )
+    }
+
+    fn transform_size(&self, s: Size<Pixels>) -> Size<Pixels> {
+        size(s.width * self.zoom, s.height * self.zoom)
+    }
+}
+
 struct SimpleTextBox {
     textboxes: Vec<TextBoxData>,
     is_dragging: Option<usize>,
     drag_offset: Option<Point<Pixels>>,
     last_move_direction: Option<Point<Pixels>>,
-    zoom_level: f32,
+    viewport: Viewport,
 }
 
 impl SimpleTextBox {
@@ -38,29 +71,15 @@ impl SimpleTextBox {
             is_dragging: None,
             drag_offset: None,
             last_move_direction: None,
-            zoom_level: 1.0,
+            viewport: Viewport::new(),
         }
     }
-    fn adjust_positions_for_zoom(&mut self, old_zoom: f32, new_zoom: f32, center: Point<Pixels>) {
-        let scale_factor = new_zoom / old_zoom;
 
-        for textbox in &mut self.textboxes {
-            // Calculate distance from center
-            let dx = textbox.position.x - center.x / old_zoom;
-            let dy = textbox.position.y - center.y / old_zoom;
-
-            // Scale the distance and add back to center
-            textbox.position = point(
-                center.x / new_zoom + dx * scale_factor,
-                center.y / new_zoom + dy * scale_factor,
-            );
-        }
-    }
     fn spawn_new_textbox(&mut self, position: Point<Pixels>) {
         self.textboxes.push(TextBoxData {
             text: "New Note".into(),
             position,
-            size: size(px(300.), px(64.)),
+            size: size(px(300.0), px(64.0)),
         });
     }
 
@@ -93,7 +112,7 @@ impl SimpleTextBox {
 impl Render for SimpleTextBox {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
         let window_size = cx.window_bounds().get_bounds().size;
-        let viewport_center = point(window_size.width / 2.0, window_size.height / 2.0);
+        self.viewport.center = point(window_size.width / 2.0, window_size.height / 2.0);
 
         div()
             .size_full()
@@ -104,10 +123,9 @@ impl Render for SimpleTextBox {
                     if let Some(offset) = this.drag_offset {
                         if let Some(textbox) = this.textboxes.get_mut(drag_idx) {
                             let old_position = textbox.position;
-                            let new_position = point(
-                                event.position.x / this.zoom_level - offset.x,
-                                event.position.y / this.zoom_level - offset.y,
-                            );
+                            let event_pos = this.viewport.inverse_transform_point(event.position);
+                            let new_position =
+                                point(event_pos.x - offset.x, event_pos.y - offset.y);
 
                             let move_delta = point(
                                 new_position.x - old_position.x,
@@ -118,29 +136,27 @@ impl Render for SimpleTextBox {
                             this.last_move_direction = Some(move_delta);
 
                             this.handle_collision(drag_idx, move_delta);
-
                             cx.notify();
                         }
                     }
                 }
             }))
-            .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, cx| {
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
                 if event.modifiers.control || event.modifiers.platform {
-                    let old_zoom = this.zoom_level;
                     match event.delta {
                         ScrollDelta::Lines(delta) => {
                             let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
-                            this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
+                            this.viewport.zoom =
+                                (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+                            cx.notify();
                         }
                         ScrollDelta::Pixels(delta) => {
                             let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
-                            this.zoom_level = (this.zoom_level * zoom_delta).max(0.1).min(5.0);
+                            this.viewport.zoom =
+                                (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+                            cx.notify();
                         }
                     }
-
-                    // Adjust positions relative to center
-                    this.adjust_positions_for_zoom(old_zoom, this.zoom_level, viewport_center);
-                    cx.notify();
                 }
             }))
             .on_mouse_up(
@@ -154,17 +170,21 @@ impl Render for SimpleTextBox {
             .children({
                 let mut elements = Vec::new();
 
+                // Add textboxes
                 elements.extend(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
+                    let transformed_pos = self.viewport.transform_point(textbox.position);
+                    let transformed_size = self.viewport.transform_size(textbox.size);
+
                     div()
                         .absolute()
-                        .left(textbox.position.x * self.zoom_level)
-                        .top(textbox.position.y * self.zoom_level)
+                        .left(transformed_pos.x)
+                        .top(transformed_pos.y)
                         .flex()
                         .flex_col()
                         .child(
                             div()
-                                .w(px(300.0 * self.zoom_level))
-                                .h(px(24.0 * self.zoom_level))
+                                .w(transformed_size.width)
+                                .h(px(24.0 * self.viewport.zoom))
                                 .bg(rgb(0x2D3142))
                                 .rounded_t_md()
                                 .flex()
@@ -183,11 +203,12 @@ impl Render for SimpleTextBox {
                                     cx.listener(move |this, event: &MouseDownEvent, _cx| {
                                         this.is_dragging = Some(idx);
                                         if let Some(textbox) = this.textboxes.get(idx) {
+                                            let event_pos = this
+                                                .viewport
+                                                .inverse_transform_point(event.position);
                                             this.drag_offset = Some(point(
-                                                (event.position.x / this.zoom_level)
-                                                    - textbox.position.x,
-                                                (event.position.y / this.zoom_level)
-                                                    - textbox.position.y,
+                                                event_pos.x - textbox.position.x,
+                                                event_pos.y - textbox.position.y,
                                             ));
                                         }
                                     }),
@@ -200,9 +221,10 @@ impl Render for SimpleTextBox {
                                         .w_full()
                                         .child("Notes")
                                         .child(div().flex().gap_2().children(vec![
+                                            // Close button
                                             div()
-                                                .w(px(16.0 * self.zoom_level))
-                                                .h(px(16.0 * self.zoom_level))
+                                                .w(px(16.0 * self.viewport.zoom))
+                                                .h(px(16.0 * self.viewport.zoom))
                                                 .bg(rgb(0xFF5252))
                                                 .rounded_full()
                                                 .cursor(CursorStyle::PointingHand)
@@ -220,9 +242,10 @@ impl Render for SimpleTextBox {
                                                         },
                                                     ),
                                                 ),
+                                            // Add button
                                             div()
-                                                .w(px(16.0 * self.zoom_level))
-                                                .h(px(16.0 * self.zoom_level))
+                                                .w(px(16.0 * self.viewport.zoom))
+                                                .h(px(16.0 * self.viewport.zoom))
                                                 .bg(rgb(0x4CAF50))
                                                 .rounded_full()
                                                 .cursor(CursorStyle::PointingHand)
@@ -252,8 +275,8 @@ impl Render for SimpleTextBox {
                         )
                         .child(
                             div()
-                                .w(px(300.0 * self.zoom_level))
-                                .h(px(40.0 * self.zoom_level))
+                                .w(transformed_size.width)
+                                .h(px(40.0 * self.viewport.zoom))
                                 .bg(white())
                                 .rounded_b_md()
                                 .shadow_md()
@@ -264,14 +287,15 @@ impl Render for SimpleTextBox {
                         )
                 }));
 
+                // Add circular add button when no textboxes exist
                 if self.textboxes.is_empty() {
                     elements.push(
                         div()
                             .absolute()
-                            .left(window_size.width / 2.0 - px(25.0 * self.zoom_level))
-                            .top(window_size.height / 2.0 - px(25.0 * self.zoom_level))
-                            .w(px(50.0 * self.zoom_level))
-                            .h(px(50.0 * self.zoom_level))
+                            .left(window_size.width / 2.0 - px(25.0 * self.viewport.zoom))
+                            .top(window_size.height / 2.0 - px(25.0 * self.viewport.zoom))
+                            .w(px(50.0 * self.viewport.zoom))
+                            .h(px(50.0 * self.viewport.zoom))
                             .bg(rgb(0x4CAF50))
                             .rounded_full()
                             .cursor(CursorStyle::PointingHand)
@@ -284,9 +308,10 @@ impl Render for SimpleTextBox {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, event: &MouseDownEvent, cx| {
+                                    let pos = this.viewport.inverse_transform_point(event.position);
                                     this.spawn_new_textbox(point(
-                                        event.position.x / this.zoom_level - px(150.),
-                                        event.position.y / this.zoom_level - px(32.),
+                                        pos.x - px(150.),
+                                        pos.y - px(32.),
                                     ));
                                     cx.notify();
                                 }),
