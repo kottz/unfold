@@ -39,17 +39,19 @@ impl Viewport {
         }
     }
 
+    // Screen <- transform <- World
     fn transform_point(&self, p: Point<Pixels>) -> Point<Pixels> {
         point(
-            (p.x - self.center.x) * self.zoom + self.center.x,
-            (p.y - self.center.y) * self.zoom + self.center.y,
+            (p.x - self.center.x) * self.zoom,
+            (p.y - self.center.y) * self.zoom,
         )
     }
 
+    // World <- inverse transform <- Screen
     fn inverse_transform_point(&self, p: Point<Pixels>) -> Point<Pixels> {
         point(
-            (p.x - self.center.x) / self.zoom + self.center.x,
-            (p.y - self.center.y) / self.zoom + self.center.y,
+            (p.x / self.zoom) + self.center.x,
+            (p.y / self.zoom) + self.center.y,
         )
     }
 
@@ -65,6 +67,9 @@ struct SimpleTextBox {
     last_move_direction: Option<Point<Pixels>>,
     viewport: Viewport,
     focus_handle: FocusHandle,
+
+    is_panning: bool,
+    last_mouse_pos: Option<Point<Pixels>>,
 }
 
 impl SimpleTextBox {
@@ -76,16 +81,16 @@ impl SimpleTextBox {
             last_move_direction: None,
             viewport: Viewport::new(),
             focus_handle: cx.focus_handle(),
+            is_panning: false,
+            last_mouse_pos: None,
         }
     }
 
     fn backspace(&mut self, _: &Backspace, cx: &mut ViewContext<Self>) {
-        println!("Backspace pressed");
         cx.notify();
     }
 
     fn reset_zoom(&mut self, _: &ResetZoom, cx: &mut ViewContext<Self>) {
-        println!("Resetting zoom");
         self.viewport.zoom = 1.0;
         cx.notify();
     }
@@ -122,14 +127,6 @@ impl SimpleTextBox {
             }
         }
     }
-    fn create_text_style(&self, base_size: f32) -> TextStyle {
-        TextStyle {
-            font_size: AbsoluteLength::Pixels(gpui::Pixels(base_size * self.viewport.zoom)),
-            font_weight: FontWeight::NORMAL, // or BOLD for headers
-            color: rgb(0x000000).into(),     // or any other color
-            ..Default::default()
-        }
-    }
 }
 
 impl FocusableView for SimpleTextBox {
@@ -140,9 +137,6 @@ impl FocusableView for SimpleTextBox {
 
 impl Render for SimpleTextBox {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
-        let window_size = cx.window_bounds().get_bounds().size;
-        self.viewport.center = point(window_size.width / 2.0, window_size.height / 2.0);
-
         div()
             .size_full()
             .bg(rgb(0xEEEEEE))
@@ -151,6 +145,17 @@ impl Render for SimpleTextBox {
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::reset_zoom))
             .on_action(cx.listener(Self::backspace))
+            // Initiate panning on blank canvas
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _cx| {
+                    if this.is_dragging.is_none() {
+                        this.is_panning = true;
+                        this.last_mouse_pos = Some(event.position);
+                    }
+                }),
+            )
+            // Handle dragging textboxes or panning
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, cx| {
                 if let Some(drag_idx) = this.is_dragging {
                     if let Some(offset) = this.drag_offset {
@@ -167,43 +172,79 @@ impl Render for SimpleTextBox {
 
                             textbox.position = new_position;
                             this.last_move_direction = Some(move_delta);
-
                             this.handle_collision(drag_idx, move_delta);
                             cx.notify();
                         }
                     }
+                } else if this.is_panning {
+                    if let Some(last_pos) = this.last_mouse_pos {
+                        let dx = event.position.x - last_pos.x;
+                        let dy = event.position.y - last_pos.y;
+
+                        this.viewport.center.x -= dx / this.viewport.zoom;
+                        this.viewport.center.y -= dy / this.viewport.zoom;
+                    }
+                    this.last_mouse_pos = Some(event.position);
+                    cx.notify();
                 }
             }))
+            // Zoom at mouse cursor
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
                 if event.modifiers.control || event.modifiers.platform {
                     match event.delta {
                         ScrollDelta::Lines(delta) => {
+                            // Pin the mouse location in world space before zoom
+                            let old_mouse_world =
+                                this.viewport.inverse_transform_point(event.position);
+
                             let zoom_delta = if delta.y < 0.0 { 0.9 } else { 1.1 };
                             this.viewport.zoom =
                                 (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+
+                            // Pin the mouse location in world space after zoom
+                            let new_mouse_world =
+                                this.viewport.inverse_transform_point(event.position);
+
+                            // Shift the center so that these two coincide
+                            this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
+                            this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
+
                             cx.notify();
                         }
                         ScrollDelta::Pixels(delta) => {
+                            let old_mouse_world =
+                                this.viewport.inverse_transform_point(event.position);
+
                             let zoom_delta = if delta.y < px(0.0) { 0.9 } else { 1.1 };
                             this.viewport.zoom =
                                 (this.viewport.zoom * zoom_delta).max(0.1).min(5.0);
+
+                            let new_mouse_world =
+                                this.viewport.inverse_transform_point(event.position);
+
+                            this.viewport.center.x += old_mouse_world.x - new_mouse_world.x;
+                            this.viewport.center.y += old_mouse_world.y - new_mouse_world.y;
+
                             cx.notify();
                         }
                     }
                 }
             }))
+            // Release drag/panning on mouse up
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _cx| {
                     this.is_dragging = None;
                     this.drag_offset = None;
                     this.last_move_direction = None;
+                    this.is_panning = false;
+                    this.last_mouse_pos = None;
                 }),
             )
             .children({
                 let mut elements = Vec::new();
 
-                // Add textboxes
+                // Textbox elements
                 elements.extend(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
                     let transformed_pos = self.viewport.transform_point(textbox.position);
                     let transformed_size = self.viewport.transform_size(textbox.size);
@@ -254,59 +295,62 @@ impl Render for SimpleTextBox {
                                         .items_center()
                                         .w_full()
                                         .child("Notes")
-                                        .child(div().flex().gap_2().children(vec![
-                                            // Close button
-                                            div()
-                                                .text_size(px(16.0 * self.viewport.zoom))
-                                                .w(px(16.0 * self.viewport.zoom))
-                                                .h(px(16.0 * self.viewport.zoom))
-                                                .bg(rgb(0xFF5252))
-                                                .rounded_full()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .flex()
-                                                .justify_center()
-                                                .items_center()
-                                                .text_color(rgb(0xFFFFFF))
-                                                .child("×")
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(
-                                                        move |this, _: &MouseDownEvent, cx| {
-                                                            this.remove_textbox(idx);
-                                                            cx.notify();
-                                                        },
-                                                    ),
-                                                ),
-                                            // Add button
-                                            div()
-                                                .text_size(px(16.0 * self.viewport.zoom))
-                                                .w(px(16.0 * self.viewport.zoom))
-                                                .h(px(16.0 * self.viewport.zoom))
-                                                .bg(rgb(0x4CAF50))
-                                                .rounded_full()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .flex()
-                                                .justify_center()
-                                                .items_center()
-                                                .text_color(rgb(0xFFFFFF))
-                                                .child("+")
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(
-                                                        move |this, _: &MouseDownEvent, cx| {
-                                                            if let Some(textbox) =
-                                                                this.textboxes.get(idx)
-                                                            {
-                                                                this.spawn_new_textbox(point(
-                                                                    textbox.position.x + px(320.),
-                                                                    textbox.position.y,
-                                                                ));
+                                        .child(
+                                            div().flex().gap_2().children(vec![
+                                                // Close button
+                                                div()
+                                                    .text_size(px(16.0 * self.viewport.zoom))
+                                                    .w(px(16.0 * self.viewport.zoom))
+                                                    .h(px(16.0 * self.viewport.zoom))
+                                                    .bg(rgb(0xFF5252))
+                                                    .rounded_full()
+                                                    .cursor(CursorStyle::PointingHand)
+                                                    .flex()
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .text_color(rgb(0xFFFFFF))
+                                                    .child("×")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this, _: &MouseDownEvent, cx| {
+                                                                this.remove_textbox(idx);
                                                                 cx.notify();
-                                                            }
-                                                        },
+                                                            },
+                                                        ),
                                                     ),
-                                                ),
-                                        ])),
+                                                // Add button
+                                                div()
+                                                    .text_size(px(16.0 * self.viewport.zoom))
+                                                    .w(px(16.0 * self.viewport.zoom))
+                                                    .h(px(16.0 * self.viewport.zoom))
+                                                    .bg(rgb(0x4CAF50))
+                                                    .rounded_full()
+                                                    .cursor(CursorStyle::PointingHand)
+                                                    .flex()
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .text_color(rgb(0xFFFFFF))
+                                                    .child("+")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this, _: &MouseDownEvent, cx| {
+                                                                if let Some(textbox) =
+                                                                    this.textboxes.get(idx)
+                                                                {
+                                                                    this.spawn_new_textbox(point(
+                                                                        textbox.position.x
+                                                                            + px(320.),
+                                                                        textbox.position.y,
+                                                                    ));
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        ),
+                                                    ),
+                                            ]),
+                                        ),
                                 ),
                         )
                         .child(
@@ -324,34 +368,41 @@ impl Render for SimpleTextBox {
                         )
                 }));
 
-                // Add circular add button when no textboxes exist
+                // "Add" button in the center if there are no textboxes
                 if self.textboxes.is_empty() {
                     elements.push(
                         div()
-                            .absolute()
-                            .left(window_size.width / 2.0 - px(25.0 * self.viewport.zoom))
-                            .top(window_size.height / 2.0 - px(25.0 * self.viewport.zoom))
-                            .w(px(50.0 * self.viewport.zoom))
-                            .h(px(50.0 * self.viewport.zoom))
-                            .bg(rgb(0x4CAF50))
-                            .rounded_full()
-                            .cursor(CursorStyle::PointingHand)
+                            .relative()
+                            .size_full()
                             .flex()
                             .justify_center()
                             .items_center()
-                            .text_color(rgb(0xFFFFFF))
-                            .text_size(px(20.0 * self.viewport.zoom))
-                            .child("+")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, event: &MouseDownEvent, cx| {
-                                    let pos = this.viewport.inverse_transform_point(event.position);
-                                    this.spawn_new_textbox(point(
-                                        pos.x - px(150.),
-                                        pos.y - px(32.),
-                                    ));
-                                    cx.notify();
-                                }),
+                            .child(
+                                div()
+                                    .w(px(50.0 * self.viewport.zoom))
+                                    .h(px(50.0 * self.viewport.zoom))
+                                    .bg(rgb(0x4CAF50))
+                                    .rounded_full()
+                                    .cursor(CursorStyle::PointingHand)
+                                    .flex()
+                                    .justify_center()
+                                    .items_center()
+                                    .text_color(rgb(0xFFFFFF))
+                                    .text_size(px(20.0 * self.viewport.zoom))
+                                    .child("+")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, event: &MouseDownEvent, cx| {
+                                            let pos = this
+                                                .viewport
+                                                .inverse_transform_point(event.position);
+                                            this.spawn_new_textbox(point(
+                                                pos.x - px(150.),
+                                                pos.y - px(32.),
+                                            ));
+                                            cx.notify();
+                                        }),
+                                    ),
                             ),
                     );
                 }
@@ -363,35 +414,27 @@ impl Render for SimpleTextBox {
 
 fn main() {
     App::new().run(|cx: &mut AppContext| {
-        println!("Registering key bindings...");
-        cx.bind_keys([KeyBinding::new("backspace", Backspace, None),
-                      KeyBinding::new("ctrl-0", ResetZoom, None)]);
-        println!("Key bindings registered!");
+        cx.bind_keys([
+            KeyBinding::new("backspace", Backspace, None),
+            KeyBinding::new("ctrl-0", ResetZoom, None),
+        ]);
 
         let bounds = Bounds::centered(None, size(px(800.), px(600.)), cx);
-        let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: None,
-                    window_decorations: Some(WindowDecorations::Client),
-                    is_movable: true,
-                    ..Default::default()
-                },
-                |cx| {
-                    let view = cx.new_view(|cx| SimpleTextBox {
-                        textboxes: vec![],
-                        is_dragging: None,
-                        drag_offset: None,
-                        last_move_direction: None,
-                        viewport: Viewport::new(),
-                        focus_handle: cx.focus_handle(),
-                    });
-                    cx.focus_view(&view);
-                    view
-                },
-            )
-            .unwrap();
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: None,
+                window_decorations: Some(WindowDecorations::Client),
+                is_movable: true,
+                ..Default::default()
+            },
+            |cx| {
+                let view = cx.new_view(|cx| SimpleTextBox::new(cx));
+                cx.focus_view(&view);
+                view
+            },
+        )
+        .unwrap();
 
         cx.activate(true);
     });
