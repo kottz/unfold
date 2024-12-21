@@ -33,44 +33,41 @@ struct SimpleTextBox {
 impl SimpleTextBox {
     fn new(_cx: &mut ViewContext<Self>) -> Self {
         Self {
-            textboxes: vec![TextBoxData {
-                text: "Hello World".into(),
-                position: point(px(250.), px(250.)),
-                size: size(px(300.), px(64.)), // 24px header + 40px content
-            }],
+            textboxes: vec![],
             is_dragging: None,
             drag_offset: None,
             last_move_direction: None,
         }
     }
 
-    fn spawn_new_textbox(&mut self, base_position: Point<Pixels>) {
+    fn spawn_new_textbox(&mut self, position: Point<Pixels>) {
         self.textboxes.push(TextBoxData {
             text: "New Note".into(),
-            position: point(base_position.x + px(320.), base_position.y),
+            position,
             size: size(px(300.), px(64.)),
         });
+    }
+
+    fn remove_textbox(&mut self, index: usize) {
+        self.textboxes.remove(index);
     }
 
     fn handle_collision(&mut self, moving_idx: usize, move_delta: Point<Pixels>) {
         let mut boxes_to_move = vec![];
         let moving_box = &self.textboxes[moving_idx];
 
-        // Find all boxes that collide with the moving box
         for (idx, other_box) in self.textboxes.iter().enumerate() {
             if idx != moving_idx && moving_box.overlaps(other_box) {
                 boxes_to_move.push(idx);
             }
         }
 
-        // Move all colliding boxes
         for idx in boxes_to_move {
             if let Some(box_to_move) = self.textboxes.get_mut(idx) {
                 box_to_move.position = point(
                     box_to_move.position.x + move_delta.x,
                     box_to_move.position.y + move_delta.y,
                 );
-                // Recursively handle any new collisions
                 self.handle_collision(idx, move_delta);
             }
         }
@@ -79,6 +76,8 @@ impl SimpleTextBox {
 
 impl Render for SimpleTextBox {
     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
+        let window_size = cx.window_bounds().get_bounds().size;
+
         div()
             .size_full()
             .bg(rgb(0xEEEEEE))
@@ -91,17 +90,14 @@ impl Render for SimpleTextBox {
                             let new_position =
                                 point(event.position.x - offset.x, event.position.y - offset.y);
 
-                            // Calculate movement delta
                             let move_delta = point(
                                 new_position.x - old_position.x,
                                 new_position.y - old_position.y,
                             );
 
-                            // Update position
                             textbox.position = new_position;
                             this.last_move_direction = Some(move_delta);
 
-                            // Handle collisions
                             this.handle_collision(drag_idx, move_delta);
 
                             cx.notify();
@@ -117,86 +113,154 @@ impl Render for SimpleTextBox {
                     this.last_move_direction = None;
                 }),
             )
-            .children(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
-                div()
-                    .absolute()
-                    .left(textbox.position.x)
-                    .top(textbox.position.y)
-                    .flex()
-                    .flex_col()
-                    .child(
+            .children({
+                let mut elements = Vec::new();
+
+                // Add textboxes
+                elements.extend(self.textboxes.iter().enumerate().map(|(idx, textbox)| {
+                    div()
+                        .absolute()
+                        .left(textbox.position.x)
+                        .top(textbox.position.y)
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .w(px(300.))
+                                .h(px(24.))
+                                .bg(rgb(0x2D3142))
+                                .rounded_t_md()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .px_2()
+                                .text_color(rgb(0xFFFFFF))
+                                .text_sm()
+                                .cursor(if self.is_dragging == Some(idx) {
+                                    CursorStyle::ClosedHand
+                                } else {
+                                    CursorStyle::OpenHand
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, event: &MouseDownEvent, _cx| {
+                                        this.is_dragging = Some(idx);
+                                        if let Some(textbox) = this.textboxes.get(idx) {
+                                            this.drag_offset = Some(point(
+                                                event.position.x - textbox.position.x,
+                                                event.position.y - textbox.position.y,
+                                            ));
+                                        }
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .w_full()
+                                        .child("Notes")
+                                        .child(div().flex().gap_2().children(vec![
+                                                // Close button
+                                                div()
+                                                    .w(px(16.))
+                                                    .h(px(16.))
+                                                    .bg(rgb(0xFF5252))
+                                                    .rounded_full()
+                                                    .cursor(CursorStyle::PointingHand)
+                                                    .flex()
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .text_color(rgb(0xFFFFFF))
+                                                    .child("×")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this, _: &MouseDownEvent, cx| {
+                                                                this.remove_textbox(idx);
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    ),
+                                                // Add button
+                                                div()
+                                                    .w(px(16.))
+                                                    .h(px(16.))
+                                                    .bg(rgb(0x4CAF50))
+                                                    .rounded_full()
+                                                    .cursor(CursorStyle::PointingHand)
+                                                    .flex()
+                                                    .justify_center()
+                                                    .items_center()
+                                                    .text_color(rgb(0xFFFFFF))
+                                                    .child("+")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this, _: &MouseDownEvent, cx| {
+                                                                if let Some(textbox) =
+                                                                    this.textboxes.get(idx)
+                                                                {
+                                                                    this.spawn_new_textbox(point(
+                                                                        textbox.position.x
+                                                                            + px(320.),
+                                                                        textbox.position.y,
+                                                                    ));
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        ),
+                                                    ),
+                                            ])),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w(px(300.))
+                                .h(px(40.))
+                                .bg(white())
+                                .rounded_b_md()
+                                .shadow_md()
+                                .p_2()
+                                .flex()
+                                .items_center()
+                                .child(textbox.text.clone()),
+                        )
+                }));
+
+                // Add circular add button when no textboxes exist
+                if self.textboxes.is_empty() {
+                    elements.push(
                         div()
-                            .w(px(300.))
-                            .h(px(24.))
-                            .bg(rgb(0x2D3142))
-                            .rounded_t_md()
+                            .absolute()
+                            .left(window_size.width / 2.0 - px(25.))
+                            .top(window_size.height / 2.0 - px(25.))
+                            .w(px(50.))
+                            .h(px(50.))
+                            .bg(rgb(0x4CAF50))
+                            .rounded_full()
+                            .cursor(CursorStyle::PointingHand)
                             .flex()
-                            .justify_between()
+                            .justify_center()
                             .items_center()
-                            .px_2()
                             .text_color(rgb(0xFFFFFF))
-                            .text_sm()
-                            .cursor(if self.is_dragging == Some(idx) {
-                                CursorStyle::ClosedHand
-                            } else {
-                                CursorStyle::OpenHand
-                            })
+                            .text_xl()
+                            .child("+")
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _cx| {
-                                    this.is_dragging = Some(idx);
-                                    if let Some(textbox) = this.textboxes.get(idx) {
-                                        this.drag_offset = Some(point(
-                                            event.position.x - textbox.position.x,
-                                            event.position.y - textbox.position.y,
-                                        ));
-                                    }
+                                cx.listener(|this, event: &MouseDownEvent, cx| {
+                                    this.spawn_new_textbox(point(
+                                        event.position.x - px(150.), // Center the textbox
+                                        event.position.y - px(32.),  // Center the textbox
+                                    ));
+                                    cx.notify();
                                 }),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .items_center()
-                                    .w_full()
-                                    .child("Notes")
-                                    .child(
-                                        div()
-                                            .w(px(16.))
-                                            .h(px(16.))
-                                            .bg(rgb(0x4CAF50))
-                                            .rounded_full()
-                                            .cursor(CursorStyle::PointingHand)
-                                            .flex()
-                                            .justify_center()
-                                            .items_center()
-                                            .text_color(rgb(0xFFFFFF))
-                                            .child("+")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _: &MouseDownEvent, cx| {
-                                                    if let Some(textbox) = this.textboxes.get(idx) {
-                                                        this.spawn_new_textbox(textbox.position);
-                                                        cx.notify();
-                                                    }
-                                                }),
-                                            ),
-                                    ),
                             ),
-                    )
-                    .child(
-                        div()
-                            .w(px(300.))
-                            .h(px(40.))
-                            .bg(white())
-                            .rounded_b_md()
-                            .shadow_md()
-                            .p_2()
-                            .flex()
-                            .items_center()
-                            .child(textbox.text.clone()),
-                    )
-            }))
+                    );
+                }
+
+                elements
+            })
     }
 }
 
