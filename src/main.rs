@@ -306,7 +306,6 @@ impl Render for SimpleTextBox {
                             .absolute()
                             .left(window_size.width / 2.0 - px(25.0 * self.viewport.zoom))
                             .top(window_size.height / 2.0 - px(25.0 * self.viewport.zoom))
-                            .text_size(px(20.0 * self.viewport.zoom))
                             .w(px(50.0 * self.viewport.zoom))
                             .h(px(50.0 * self.viewport.zoom))
                             .bg(rgb(0x4CAF50))
@@ -316,7 +315,7 @@ impl Render for SimpleTextBox {
                             .justify_center()
                             .items_center()
                             .text_color(rgb(0xFFFFFF))
-                            .text_xl()
+                            .text_size(px(20.0 * self.viewport.zoom))
                             .child("+")
                             .on_mouse_down(
                                 MouseButton::Left,
