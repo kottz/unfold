@@ -2,6 +2,9 @@ use gpui::*;
 
 actions!(simple_text_box, [ResetZoom, Backspace]);
 
+#[derive(Clone, Debug)]
+struct DragState;
+
 #[derive(Clone)]
 struct TextBoxData {
     text: SharedString,
@@ -228,7 +231,12 @@ impl Render for SimpleTextBox {
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::reset_zoom))
             .on_action(cx.listener(Self::backspace))
-            // Initiate panning on blank canvas
+            .id("simple_text_box")
+            .on_drag(DragState, move |this, _, cx| {
+                println!("Dragged!");
+                cx.new_view(|_| EmptyView {})
+            })
+            //Initiate panning on blank canvas
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _cx| {
@@ -239,12 +247,13 @@ impl Render for SimpleTextBox {
                 }),
             )
             // Handle dragging textboxes or panning
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, cx| {
+            .on_drag_move(cx.listener(|this, event: &DragMoveEvent<DragState>, cx| {
                 if let Some(drag_idx) = this.is_dragging {
                     if let Some(offset) = this.drag_offset {
                         if let Some(textbox) = this.textboxes.get_mut(drag_idx) {
                             let old_position = textbox.position;
-                            let event_pos = this.viewport.inverse_transform_point(event.position);
+                            let event_pos =
+                                this.viewport.inverse_transform_point(event.event.position);
                             let new_position =
                                 point(event_pos.x - offset.x, event_pos.y - offset.y);
 
@@ -261,13 +270,13 @@ impl Render for SimpleTextBox {
                     }
                 } else if this.is_panning {
                     if let Some(last_pos) = this.last_mouse_pos {
-                        let dx = event.position.x - last_pos.x;
-                        let dy = event.position.y - last_pos.y;
+                        let dx = event.event.position.x - last_pos.x;
+                        let dy = event.event.position.y - last_pos.y;
 
                         this.viewport.center.x -= dx / this.viewport.zoom;
                         this.viewport.center.y -= dy / this.viewport.zoom;
                     }
-                    this.last_mouse_pos = Some(event.position);
+                    this.last_mouse_pos = Some(event.event.position);
                     cx.notify();
                 }
             }))
