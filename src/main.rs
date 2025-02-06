@@ -56,6 +56,20 @@ impl DraggableTextBox {
             index,
         }
     }
+
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::new(self.position, self.size)
+    }
+
+    fn overlaps(&self, other: &DraggableTextBox) -> bool {
+        let b1 = self.bounds();
+        let b2 = other.bounds();
+
+        b1.origin.x < (b2.origin.x + b2.size.width)
+            && (b1.origin.x + b1.size.width) > b2.origin.x
+            && b1.origin.y < (b2.origin.y + b2.size.height)
+            && (b1.origin.y + b1.size.height) > b2.origin.y
+    }
 }
 
 impl Render for DraggableTextBox {
@@ -92,6 +106,7 @@ struct ViewportApp {
     is_panning: bool,
     last_mouse_pos: Option<Point<Pixels>>,
     focus_handle: FocusHandle,
+    last_move_direction: Option<Point<Pixels>>,
 }
 
 impl ViewportApp {
@@ -122,6 +137,7 @@ impl ViewportApp {
             is_panning: false,
             last_mouse_pos: None,
             focus_handle: cx.focus_handle(),
+            last_move_direction: None,
         }
     }
 
@@ -133,9 +149,55 @@ impl ViewportApp {
     ) {
         if let Some(textbox) = self.textboxes.get(index) {
             textbox.update(cx, |textbox, cx| {
+                let old_position = textbox.position;
                 textbox.position = new_position;
                 cx.notify();
+
+                // Calculate move delta for collision handling
+                let move_delta = point(
+                    new_position.x - old_position.x,
+                    new_position.y - old_position.y,
+                );
+                self.last_move_direction = Some(move_delta);
             });
+
+            // After updating position, handle any collisions
+            self.handle_collisions(index, cx);
+        }
+    }
+
+    fn handle_collisions(&mut self, moving_idx: usize, cx: &mut ViewContext<Self>) {
+        if let Some(move_delta) = self.last_move_direction {
+            let mut boxes_to_move = Vec::new();
+
+            // First, collect all boxes that need to be moved
+            if let Some(moving_box) = self.textboxes.get(moving_idx) {
+                let moving_box_data = moving_box.read(cx);
+
+                for (idx, other_box) in self.textboxes.iter().enumerate() {
+                    if idx != moving_idx {
+                        let other_box_data = other_box.read(cx);
+                        if moving_box_data.overlaps(&other_box_data) {
+                            boxes_to_move.push(idx);
+                        }
+                    }
+                }
+            }
+
+            // Then move the colliding boxes
+            for idx in boxes_to_move {
+                if let Some(box_to_move) = self.textboxes.get(idx) {
+                    box_to_move.update(cx, |textbox, cx| {
+                        textbox.position = point(
+                            textbox.position.x + move_delta.x,
+                            textbox.position.y + move_delta.y,
+                        );
+                        cx.notify();
+                    });
+                    // Recursively handle any new collisions
+                    self.handle_collisions(idx, cx);
+                }
+            }
         }
     }
 }
@@ -236,6 +298,7 @@ impl Render for ViewportApp {
                     this.drag_offset = None;
                     this.is_panning = false;
                     this.last_mouse_pos = None;
+                    this.last_move_direction = None;
                 }),
             )
             .children(textbox_data.into_iter().map(move |(idx, text, pos, size)| {
@@ -254,7 +317,6 @@ impl Render for ViewportApp {
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _cx| {
                             this.is_dragging = Some(idx);
-                            // When starting drag, use screen coordinates for offset
                             this.drag_offset =
                                 Some(point(event.position.x - pos.x, event.position.y - pos.y));
                         }),
