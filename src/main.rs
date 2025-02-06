@@ -73,7 +73,7 @@ impl DraggableTextBox {
 }
 
 impl Render for DraggableTextBox {
-    fn render(&mut self, _cx: &mut ViewContext<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .absolute()
             .left(self.position.x)
@@ -88,9 +88,9 @@ impl Render for DraggableTextBox {
                 CursorStyle::OpenHand
             })
             .id(("textbox", self.index))
-            .on_drag(DragState, move |_this, _, cx| {
-                println!("Textbox dragged!");
-                cx.new_view(|_| EmptyView {})
+            .on_drag(DragState, move |_this, offset, _window, cx| {
+                println!("Textbox dragged with offset: {:?}", offset);
+                cx.new(|_| EmptyView {})
             })
             .child(self.text.clone())
     }
@@ -99,7 +99,7 @@ impl Render for DraggableTextBox {
 // Main ViewportApp
 #[derive(Clone)]
 struct ViewportApp {
-    textboxes: Vec<View<DraggableTextBox>>,
+    textboxes: Vec<Entity<DraggableTextBox>>,
     viewport: Viewport,
     is_dragging: Option<usize>,
     drag_offset: Option<Point<Pixels>>,
@@ -110,8 +110,8 @@ struct ViewportApp {
 }
 
 impl ViewportApp {
-    fn new(cx: &mut ViewContext<Self>) -> Self {
-        let textbox1 = cx.new_view(|_cx| {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let textbox1 = cx.new(|_| {
             DraggableTextBox::new(
                 "Hello World".into(),
                 point(px(100.0), px(100.0)),
@@ -120,7 +120,7 @@ impl ViewportApp {
             )
         });
 
-        let textbox2 = cx.new_view(|_cx| {
+        let textbox2 = cx.new(|_| {
             DraggableTextBox::new(
                 "Second Box".into(),
                 point(px(400.0), px(300.0)),
@@ -145,7 +145,7 @@ impl ViewportApp {
         &mut self,
         index: usize,
         new_position: Point<Pixels>,
-        cx: &mut ViewContext<Self>,
+        cx: &mut Context<Self>,
     ) {
         if let Some(textbox) = self.textboxes.get(index) {
             textbox.update(cx, |textbox, cx| {
@@ -153,7 +153,6 @@ impl ViewportApp {
                 textbox.position = new_position;
                 cx.notify();
 
-                // Calculate move delta for collision handling
                 let move_delta = point(
                     new_position.x - old_position.x,
                     new_position.y - old_position.y,
@@ -161,16 +160,14 @@ impl ViewportApp {
                 self.last_move_direction = Some(move_delta);
             });
 
-            // After updating position, handle any collisions
             self.handle_collisions(index, cx);
         }
     }
 
-    fn handle_collisions(&mut self, moving_idx: usize, cx: &mut ViewContext<Self>) {
+    fn handle_collisions(&mut self, moving_idx: usize, cx: &mut Context<Self>) {
         if let Some(move_delta) = self.last_move_direction {
             let mut boxes_to_move = Vec::new();
 
-            // First, collect all boxes that need to be moved
             if let Some(moving_box) = self.textboxes.get(moving_idx) {
                 let moving_box_data = moving_box.read(cx);
 
@@ -184,7 +181,6 @@ impl ViewportApp {
                 }
             }
 
-            // Then move the colliding boxes
             for idx in boxes_to_move {
                 if let Some(box_to_move) = self.textboxes.get(idx) {
                     box_to_move.update(cx, |textbox, cx| {
@@ -194,7 +190,6 @@ impl ViewportApp {
                         );
                         cx.notify();
                     });
-                    // Recursively handle any new collisions
                     self.handle_collisions(idx, cx);
                 }
             }
@@ -202,15 +197,14 @@ impl ViewportApp {
     }
 }
 
-impl FocusableView for ViewportApp {
-    fn focus_handle(&self, _: &AppContext) -> FocusHandle {
+impl Focusable for ViewportApp {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
 impl Render for ViewportApp {
-    fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
-        // Collect the data we need before the map operation
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let textbox_data: Vec<_> = self
             .textboxes
             .iter()
@@ -235,43 +229,45 @@ impl Render for ViewportApp {
             .key_context("viewport_app")
             .track_focus(&self.focus_handle(cx))
             .id("viewport_app")
-            .on_drag(DragState, move |_this, _, cx| {
-                println!("Canvas dragged!");
-                cx.new_view(|_| EmptyView {})
+            .on_drag(DragState, move |_this, offset, _window, cx| {
+                println!("Canvas dragged with offset: {:?}", offset);
+                cx.new(|_| EmptyView {})
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _cx| {
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                     if this.is_dragging.is_none() {
                         this.is_panning = true;
                         this.last_mouse_pos = Some(event.position);
+                        cx.notify();
                     }
                 }),
             )
-            .on_drag_move(cx.listener(|this, event: &DragMoveEvent<DragState>, cx| {
-                if let Some(drag_idx) = this.is_dragging {
-                    if let Some(offset) = this.drag_offset {
-                        // During drag, first get screen-space delta
-                        let screen_pos = event.event.position;
-                        let new_screen_pos =
-                            point(screen_pos.x - offset.x, screen_pos.y - offset.y);
-                        // Then convert screen position to world position
-                        let new_position = this.viewport.inverse_transform_point(new_screen_pos);
-                        this.update_textbox_position(drag_idx, new_position, cx);
-                    }
-                } else if this.is_panning {
-                    if let Some(last_pos) = this.last_mouse_pos {
-                        let dx = event.event.position.x - last_pos.x;
-                        let dy = event.event.position.y - last_pos.y;
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<DragState>, _window, cx| {
+                    if let Some(drag_idx) = this.is_dragging {
+                        if let Some(offset) = this.drag_offset {
+                            let screen_pos = event.event.position;
+                            let new_screen_pos =
+                                point(screen_pos.x - offset.x, screen_pos.y - offset.y);
+                            let new_position =
+                                this.viewport.inverse_transform_point(new_screen_pos);
+                            this.update_textbox_position(drag_idx, new_position, cx);
+                        }
+                    } else if this.is_panning {
+                        if let Some(last_pos) = this.last_mouse_pos {
+                            let dx = event.event.position.x - last_pos.x;
+                            let dy = event.event.position.y - last_pos.y;
 
-                        this.viewport.center.x -= dx / this.viewport.zoom;
-                        this.viewport.center.y -= dy / this.viewport.zoom;
+                            this.viewport.center.x -= dx / this.viewport.zoom;
+                            this.viewport.center.y -= dy / this.viewport.zoom;
+                        }
+                        this.last_mouse_pos = Some(event.event.position);
+                        cx.notify();
                     }
-                    this.last_mouse_pos = Some(event.event.position);
-                    cx.notify();
-                }
-            }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, cx| {
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 let old_mouse_world = this.viewport.inverse_transform_point(event.position);
 
                 match event.delta {
@@ -293,12 +289,13 @@ impl Render for ViewportApp {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _cx| {
+                cx.listener(|this, _: &MouseUpEvent, _window, cx| {
                     this.is_dragging = None;
                     this.drag_offset = None;
                     this.is_panning = false;
                     this.last_mouse_pos = None;
                     this.last_move_direction = None;
+                    cx.notify();
                 }),
             )
             .children(textbox_data.into_iter().map(move |(idx, text, pos, size)| {
@@ -315,10 +312,11 @@ impl Render for ViewportApp {
                     .id(("textbox", idx))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _cx| {
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
                             this.is_dragging = Some(idx);
                             this.drag_offset =
                                 Some(point(event.position.x - pos.x, event.position.y - pos.y));
+                            cx.notify();
                         }),
                     )
                     .child(text)
@@ -327,14 +325,14 @@ impl Render for ViewportApp {
 }
 
 fn main() {
-    App::new().run(|cx: &mut AppContext| {
-        let bounds = Bounds::centered(None, size(px(800.), px(600.)), cx);
-        cx.open_window(
+    Application::new().run(|app: &mut App| {
+        let bounds = Bounds::centered(None, size(px(800.), px(600.)), app);
+        app.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |cx| cx.new_view(|cx| ViewportApp::new(cx)),
+            |_, cx| cx.new(|cx| ViewportApp::new(cx)),
         )
         .unwrap();
     });
